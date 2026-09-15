@@ -1,0 +1,4 @@
+interface:
+  display_name: "SafeFork"
+  short_description: "安全同步 GitHub Fork 的分支与不可变标签"
+  default_prompt: "Use $safefork to safely synchronize a GitHub fork without merge, force update, or deletion."
