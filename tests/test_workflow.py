@@ -51,12 +51,14 @@ def mock_api(args):
     case = os.environ["TEST_CASE"]
     path = Path(os.environ["TEST_STATE"])
     state = json.loads(path.read_text())
-    route = next(arg for arg in args if arg.startswith("repos/"))
+    route = next(arg for arg in args if arg == "meta" or arg.startswith("repos/"))
     method = args[args.index("--method") + 1] if "--method" in args else "GET"
     state["calls"].append({"method": method, "route": route, "args": args})
     result, status = "", 0
 
-    if route == "repos/CaptainUnhappy/example-SafeFork":
+    if route == "meta":
+        result = "ssh-ed25519 AAAATEST"
+    elif route == "repos/CaptainUnhappy/example-SafeFork":
         result = "owner/example"
     elif "/git/matching-refs/" in route:
         upstream = "owner/example/" in route
@@ -105,6 +107,31 @@ def mock_api(args):
     return status
 
 
+def mock_git(args):
+    state_path = Path(os.environ["TEST_STATE"])
+    state = json.loads(state_path.read_text())
+    command = next((arg for arg in args if arg in {"init", "fetch", "rev-parse", "push"}), "")
+
+    if command in {"init", "fetch"}:
+        pass
+    elif command == "rev-parse":
+        _, _, ref_type, name = args[-1].split("/", 3)
+        refs = state["upstream_heads" if ref_type == "heads" else "upstream_tags"]
+        print(refs[name])
+    elif command == "push":
+        _, destination = args[-1].split(":refs/", 1)
+        ref_type, name = destination.split("/", 1)
+        target = state["fork_heads" if ref_type == "heads" else "fork_tags"]
+        source = state["upstream_heads" if ref_type == "heads" else "upstream_tags"]
+        state["calls"].append({"method": "GIT_PUSH", "route": destination, "args": args})
+        target[name] = source[name]
+    else:
+        raise AssertionError(f"Unexpected git command: {args}")
+
+    state_path.write_text(json.dumps(state))
+    return 0
+
+
 class WorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -113,7 +140,7 @@ class WorkflowTests(unittest.TestCase):
         cls.script = workflow["jobs"]["sync"]["steps"][0]["run"]
 
     def test_contract_and_syntax(self):
-        self.assertEqual(self.workflow["permissions"], {"contents": "write"})
+        self.assertEqual(self.workflow["permissions"], {"contents": "read"})
         self.assertIn('upstream_tags_raw=$(list_refs "$UPSTREAM_REPO" tags)', self.script)
         self.assertNotIn("--method DELETE", self.script)
         self.assertNotIn("force=true", self.script)
@@ -140,17 +167,19 @@ class WorkflowTests(unittest.TestCase):
                     PRIMARY_BRANCH="main",
                     MIN_FILE_COUNT="3",
                     MIN_FILE_PERCENT="40",
+                    SAFEFORK_DEPLOY_KEY="test-private-key",
                     DRY_RUN="true" if case == "dry_run" else "false",
                     GITHUB_STEP_SUMMARY=(Path(folder) / "summary.md").as_posix(),
                     TEST_CASE=case,
                     TEST_STATE=state_path.as_posix(),
                     PYTHONIOENCODING="utf-8",
                 )
-                shim = "gh() { " + shlex.quote(Path(sys.executable).as_posix()) + " " + shlex.quote(Path(__file__).as_posix()) + ' mock "$@"; }\nsleep() { :; }\n'
+                command = shlex.quote(Path(sys.executable).as_posix()) + " " + shlex.quote(Path(__file__).as_posix())
+                shim = "gh() { " + command + ' mock "$@"; }\ngit() { ' + command + ' git-mock "$@"; }\nsleep() { :; }\n'
                 result = subprocess.run([BASH, "-s"], input=shim + self.script, env=env, capture_output=True, encoding="utf-8")
                 self.assertEqual(result.returncode, expected_exit, result.stdout + result.stderr)
                 calls = json.loads(state_path.read_text())["calls"]
-                writes = [call for call in calls if call["method"] in {"POST", "PATCH", "DELETE"}]
+                writes = [call for call in calls if call["method"] in {"POST", "PATCH", "DELETE", "GIT_PUSH"}]
                 self.assertEqual(len(writes), expected_writes, result.stdout + result.stderr)
                 self.assertFalse(any(call["method"] == "DELETE" for call in writes))
                 self.assertFalse(any("force=true" in call["args"] for call in writes))
@@ -159,4 +188,6 @@ class WorkflowTests(unittest.TestCase):
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "mock":
         sys.exit(mock_api(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "git-mock":
+        sys.exit(mock_git(sys.argv[2:]))
     unittest.main(verbosity=2)

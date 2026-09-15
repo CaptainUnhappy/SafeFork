@@ -79,4 +79,6 @@ SafeFork 的目标是让 Fork 持续获得上游 Git 分支与标签，同时保
 
 ## 令牌
 
-普通 ref 写入需要 `contents: write`。当上游提交新增或修改 `.github/workflows/*` 时，`GITHUB_TOKEN` 可能被 GitHub 拒绝；使用只授权目标仓库 Contents 与 Workflows 写权限的 fine-grained PAT，保存为 `SAFEFORK_PAT`。不得把令牌写入仓库。
+工作流只给 `GITHUB_TOKEN` 配置 `contents: read`，用于读取和校验。引用写入使用仅绑定目标 Fork 的 write-enabled deploy key，私钥保存为 Actions Secret `SAFEFORK_DEPLOY_KEY`。这避免把可访问其他仓库的用户 PAT 交给定时任务，也能同步涉及 `.github/workflows/*` 的提交或标签。
+
+部署时生成独立 Ed25519 密钥对，将公钥添加到目标 Fork 的 Deploy keys 并启用写入，将私钥原文写入 `SAFEFORK_DEPLOY_KEY`。密钥不得复用于其他仓库，不得提交到 Git。

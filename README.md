@@ -19,7 +19,7 @@ SafeFork 是 GitHub Fork 的非破坏性同步规范：同步上游分支和标�
 
 - 仓库变量 `SAFEFORK_UPSTREAM=owner/repo`
 - 仓库变量 `SAFEFORK_PRIMARY_BRANCH=main`（按上游默认分支调整）
-- 可选 Secret `SAFEFORK_PAT`：上游提交涉及 `.github/workflows/` 时使用
+- Actions Secret `SAFEFORK_DEPLOY_KEY`：仅可写入目标 Fork 的 deploy key 私钥
 
 首次运行请选择 `dry_run`。完整规则、验收和回滚测试见 [规范](skills/safefork/references/spec.md)。
 

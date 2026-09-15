@@ -29,6 +29,6 @@ Read [references/spec.md](references/spec.md) before creating or changing a remo
 - Preserve Fork-only branches and tags.
 - `dry_run` must perform zero writes.
 - Do not create backup branches unless the user explicitly requests one and sees its exact name.
-- If the workflow may advance through commits that modify `.github/workflows/`, use a narrowly scoped PAT or GitHub App token with workflow write permission; never store tokens in files.
+- Use a write-enabled deploy key restricted to the target Fork for ref pushes. Keep its private key only in the `SAFEFORK_DEPLOY_KEY` Actions Secret; do not substitute a broad user PAT merely for convenience.
 
 GitHub Releases, Issues, Actions history, repository settings, secrets, and LFS objects are outside SafeFork ref synchronization. If the user asks for a perfect mirror, explain that deletion and history rewriting conflict with SafeFork, then require a separate explicit destructive-mirror request.

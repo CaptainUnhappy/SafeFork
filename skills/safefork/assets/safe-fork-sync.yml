@@ -11,7 +11,7 @@ on:
         default: false
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: safefork-sync
@@ -25,7 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      GH_TOKEN: ${{ secrets.SAFEFORK_PAT || github.token }}
+      GH_TOKEN: ${{ github.token }}
+      SAFEFORK_DEPLOY_KEY: ${{ secrets.SAFEFORK_DEPLOY_KEY }}
       UPSTREAM_REPO: ${{ vars.SAFEFORK_UPSTREAM }}
       CONTROL_BRANCH: ${{ github.event.repository.default_branch }}
       PRIMARY_BRANCH: ${{ vars.SAFEFORK_PRIMARY_BRANCH || 'main' }}
@@ -37,7 +38,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          trap 'echo "::error::Sync did not complete. The summary lists refs already written. Configure SAFEFORK_PAT if workflow permission is required."' ERR
+          push_dir=
+
+          cleanup() {
+            [ -z "$push_dir" ] || rm -rf -- "$push_dir"
+          }
+
+          trap cleanup EXIT
+          trap 'echo "::error::Sync did not complete. The summary lists refs already written."' ERR
 
           report() {
             printf '%s\n' "$1"
@@ -66,6 +74,32 @@ jobs:
             done
             report "::error::$ref verification failed; expected $expected, got ${actual:-unavailable}."
             return 1
+          }
+
+          configure_push() {
+            if [ -z "${SAFEFORK_DEPLOY_KEY:-}" ]; then
+              report "::error::Writes are planned, but repository-scoped SAFEFORK_DEPLOY_KEY is not configured."
+              return 1
+            fi
+            push_dir=$(mktemp -d)
+            printf '%s\n' "$SAFEFORK_DEPLOY_KEY" > "$push_dir/key"
+            chmod 600 "$push_dir/key"
+            gh api meta --jq '.ssh_keys[] | "github.com \(.)"' > "$push_dir/known_hosts"
+            git -C "$push_dir" init --bare --quiet
+            export GIT_SSH_COMMAND="ssh -i $push_dir/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$push_dir/known_hosts -o StrictHostKeyChecking=yes"
+          }
+
+          push_ref() {
+            local kind=$1 name=$2 expected=$3 staged actual
+            staged="refs/safefork/$kind/$name"
+            git -C "$push_dir" fetch --quiet --no-tags --depth=1 "https://github.com/$UPSTREAM_REPO.git" "refs/$kind/$name:$staged"
+            actual=$(git -C "$push_dir" rev-parse "$staged")
+            if [ "$actual" != "$expected" ]; then
+              report "::error::$kind/$name fetched SHA differs from the locked source SHA."
+              return 1
+            fi
+            git -C "$push_dir" push --quiet "git@github.com:$GITHUB_REPOSITORY.git" "$staged:refs/$kind/$name"
+            verify_ref "$kind/$name" "$expected"
           }
 
           if [ -z "$UPSTREAM_REPO" ]; then
@@ -172,6 +206,9 @@ jobs:
           fi
 
           writes=0
+          planned_writes=$((${#create_branches[@]} + ${#update_branches[@]} + ${#create_tags[@]}))
+          [ "$planned_writes" -eq 0 ] || configure_push
+
           for branch in "${update_branches[@]}"; do
             expected_before=${fork_heads[$branch]}
             latest=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" --jq '.object.sha')
@@ -180,25 +217,22 @@ jobs:
               exit 1
             fi
             source_sha=${upstream_heads[$branch]}
-            updated=$(gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/$branch" -f sha="$source_sha" -F force=false --jq '.object.sha')
+            push_ref heads "$branch" "$source_sha"
             writes=$((writes + 1))
-            [ "$updated" = "$source_sha" ] && verify_ref "heads/$branch" "$source_sha"
             report "Fast-forwarded branch: $branch -> $source_sha"
           done
 
           for branch in "${create_branches[@]}"; do
             source_sha=${upstream_heads[$branch]}
-            created=$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/$branch" -f sha="$source_sha" --jq '.object.sha')
+            push_ref heads "$branch" "$source_sha"
             writes=$((writes + 1))
-            [ "$created" = "$source_sha" ] && verify_ref "heads/$branch" "$source_sha"
             report "Created branch: $branch -> $source_sha"
           done
 
           for tag in "${create_tags[@]}"; do
             source_sha=${upstream_tags[$tag]}
-            created=$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$tag" -f sha="$source_sha" --jq '.object.sha')
+            push_ref tags "$tag" "$source_sha"
             writes=$((writes + 1))
-            [ "$created" = "$source_sha" ] && verify_ref "tags/$tag" "$source_sha"
             report "Copied tag: $tag -> $source_sha"
           done
 
