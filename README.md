@@ -4,6 +4,7 @@ SafeFork 是 GitHub Fork 的非破坏性同步规范：同步上游分支和标�
 
 ## 默认行为
 
+- 未指定目标名称时，Fork 命名为 `<上游仓库名>-SafeFork`；已有该后缀时不重复追加。
 - 上游新分支：在 Fork 创建同名分支。
 - 上游已有分支：只有在 Fork 可 fast-forward 时才更新。
 - 上游新标签：复制原始 tag ref，包括 annotated tag。
@@ -12,6 +13,8 @@ SafeFork 是 GitHub Fork 的非破坏性同步规范：同步上游分支和标�
 - GitHub Releases、Issues、Actions 历史、仓库设置和 LFS 对象：不属于 Git refs，不在同步范围内。
 
 这不是 1:1 镜像。真正镜像必须允许删除或强推，与“保留 Fork 数据”的安全目标冲突。
+
+显式指定的仓库名称和所有者优先。否则默认使用当前登录的 GitHub 账号；若默认名称被无关仓库占用，或同一上游已有不同名称的 Fork，SafeFork 会停止并请求选择，不自动加数字或重命名。
 
 ## 使用
 
