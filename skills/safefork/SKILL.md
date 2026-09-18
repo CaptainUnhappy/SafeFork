@@ -24,11 +24,13 @@ Read [references/spec.md](references/spec.md) before creating or changing a remo
 - Keep an isolated default control branch, normally `sync-control`, because scheduled workflows run only from the default branch.
 - Never create merge commits during synchronization.
 - Never use force updates or delete refs in scheduled synchronization.
+- Fetch complete commit ancestry before ordinary Git pushes; do not use shallow fetches for ref synchronization.
 - Never move an existing tag. Same name with a different SHA is a hard conflict.
 - Never overwrite a diverged or Fork-ahead branch.
 - Lock source and target snapshots before writes; stop if either changes unexpectedly.
 - Preserve Fork-only branches and tags.
 - `dry_run` must perform zero writes.
+- A green zero-write run does not validate transport. Cover real fast-forward, new-branch, and annotated-tag pushes in isolated Git tests before deploying template changes.
 - Do not create backup branches unless the user explicitly requests one and sees its exact name.
 - If the default target name is occupied by an unrelated repository, or the namespace already has a differently named Fork of the same upstream, stop and ask which repository to use. Never append a numeric suffix or rename an existing repository silently.
 - Use a write-enabled deploy key restricted to the target Fork for ref pushes. Keep its private key only in the `SAFEFORK_DEPLOY_KEY` Actions Secret; do not substitute a broad user PAT merely for convenience.

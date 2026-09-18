@@ -132,6 +132,114 @@ def mock_git(args):
     return 0
 
 
+class RealGitPushTests(unittest.TestCase):
+    """Exercise the template's push_ref with real Git and local repositories."""
+
+    @classmethod
+    def setUpClass(cls):
+        workflow = yaml.load(WORKFLOW.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+        script = workflow["jobs"]["sync"]["steps"][0]["run"]
+        start = script.index("push_ref() {")
+        end = script.index('\n\nif [ -z "$UPSTREAM_REPO"', start)
+        cls.push_function = script[start:end]
+
+    def git(self, repo, *args, input=None):
+        result = subprocess.run(
+            ["git", "-C", str(repo), *args], input=input, text=True,
+            capture_output=True, encoding="utf-8", check=True,
+        )
+        return result.stdout.strip()
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.source, self.fork, self.stage = (Path(folder.name) / name for name in ("source.git", "fork.git", "stage.git"))
+        for repo in (self.source, self.fork, self.stage):
+            subprocess.run(["git", "init", "--bare", "--quiet", str(repo)], check=True)
+        self.git(self.source, "config", "user.name", "SafeFork Test")
+        self.git(self.source, "config", "user.email", "test@example.invalid")
+        tree = self.git(self.source, "hash-object", "-w", "-t", "tree", "--stdin", input="")
+        self.old = self.git(self.source, "commit-tree", tree, "-m", "initial")
+        middle = self.git(self.source, "commit-tree", tree, "-p", self.old, "-m", "update 1")
+        self.new = self.git(self.source, "commit-tree", tree, "-p", middle, "-m", "update 2")
+        self.tree = tree
+        self.git(self.source, "update-ref", "refs/heads/main", self.new)
+        self.git(self.fork, "fetch", "--quiet", "--no-tags", self.source.as_uri(), f"{self.old}:refs/heads/main")
+
+    def push_ref(self, kind, name, expected):
+        # Rewrite only transport URLs. Fetch, ancestry checks and push stay real.
+        shim = r'''
+set -euo pipefail
+report() { printf '%s\n' "$1"; }
+verify_ref() {
+  local actual
+  actual=$(command git -C "$TEST_FORK_PATH" rev-parse "refs/$1")
+  [ "$actual" = "$2" ]
+}
+git() {
+  local arg
+  local -a args=()
+  for arg in "$@"; do
+    case "$arg" in
+      "https://github.com/owner/example.git") arg=$TEST_UPSTREAM_URL ;;
+      "git@github.com:CaptainUnhappy/example-SafeFork.git") arg=$TEST_FORK_PATH ;;
+    esac
+    args+=("$arg")
+  done
+  command git "${args[@]}"
+}
+'''
+        env = dict(
+            os.environ, push_dir=self.stage.as_posix(), UPSTREAM_REPO="owner/example",
+            GITHUB_REPOSITORY="CaptainUnhappy/example-SafeFork",
+            TEST_UPSTREAM_URL=self.source.as_uri(), TEST_FORK_PATH=self.fork.as_posix(),
+        )
+        return subprocess.run(
+            [BASH, "-s", "--", kind, name, expected],
+            input=shim + self.push_function + '\npush_ref "$@"\n',
+            env=env, capture_output=True, encoding="utf-8",
+        )
+
+    def test_real_fast_forward_preserves_history_and_fork_only_ref(self):
+        self.git(self.fork, "update-ref", "refs/heads/scratch", self.old)
+        result = self.push_ref("heads", "main", self.new)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.git(self.fork, "rev-parse", "refs/heads/main"), self.new)
+        self.assertEqual(self.git(self.stage, "rev-parse", "refs/safefork/heads/main~2"), self.old)
+        self.assertEqual(self.git(self.fork, "rev-parse", "refs/heads/scratch"), self.old)
+
+    def test_real_new_branch_copy_preserves_history(self):
+        self.git(self.source, "update-ref", "refs/heads/release/v1", self.new)
+        result = self.push_ref("heads", "release/v1", self.new)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.git(self.fork, "rev-parse", "refs/heads/release/v1"), self.new)
+        self.assertEqual(self.git(self.fork, "rev-parse", "refs/heads/release/v1~2"), self.old)
+
+    def test_real_annotated_tag_copy_preserves_object_and_history(self):
+        self.git(self.source, "-c", "tag.gpgSign=false", "tag", "-a", "v1", "-m", "release", self.new)
+        tag_sha = self.git(self.source, "rev-parse", "refs/tags/v1")
+        result = self.push_ref("tags", "v1", tag_sha)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.git(self.fork, "rev-parse", "refs/tags/v1"), tag_sha)
+        self.assertEqual(self.git(self.fork, "cat-file", "-t", tag_sha), "tag")
+        self.assertEqual(self.git(self.fork, "rev-parse", "refs/tags/v1^{}"), self.new)
+        self.assertEqual(self.git(self.fork, "rev-parse", "refs/tags/v1~2"), self.old)
+
+    def test_real_push_rejects_divergence_without_overwrite(self):
+        fork_tip = self.git(self.source, "commit-tree", self.tree, "-p", self.old, "-m", "fork work")
+        self.git(self.fork, "fetch", "--quiet", "--no-tags", self.source.as_uri(), f"{fork_tip}:refs/heads/main")
+        result = self.push_ref("heads", "main", self.new)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertRegex(result.stderr, r"\((?:fetch first|non-fast-forward)\)")
+        self.assertEqual(self.git(self.fork, "rev-parse", "refs/heads/main"), fork_tip)
+
+    def test_real_source_sha_mismatch_writes_nothing(self):
+        result = self.push_ref("heads", "main", self.old)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("fetched SHA differs", result.stdout)
+        self.assertEqual(self.git(self.fork, "rev-parse", "refs/heads/main"), self.old)
+
+
 class WorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
