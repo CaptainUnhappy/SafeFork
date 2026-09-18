@@ -1,7 +1,13 @@
 ---
 name: safefork
 description: Create, audit, repair, or run non-destructive GitHub Fork synchronization for upstream branches and immutable tags. Use when the user asks to SafeFork a repository or safely sync a Fork without merge, force updates, or deletions.
+license: MPL-2.0
 ---
+
+<!--
+Copyright (c) 2026 CaptainUnhappy
+SPDX-License-Identifier: MPL-2.0
+-->
 
 # SafeFork
 

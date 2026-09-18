@@ -1,3 +1,6 @@
+# Copyright (c) 2026 CaptainUnhappy
+# SPDX-License-Identifier: MPL-2.0
+
 import json
 import os
 from pathlib import Path

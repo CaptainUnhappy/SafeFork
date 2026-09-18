@@ -29,3 +29,13 @@ SafeFork 是 GitHub Fork 的非破坏性同步规范：同步上游分支和标�
 模板使用完整提交历史进行普通 push，计划每小时检查一次；GitHub 定时调度可能延迟或丢弃，不提供准时保证。完整规则、验收和回滚测试见 [规范](skills/safefork/references/spec.md)。
 
 在 Codex 中安装本仓库的 `skills/safefork` 后，可直接说：`使用 $safefork 安全同步 owner/repo 的 Fork`。
+
+## 许可证
+
+Copyright (c) 2026 CaptainUnhappy
+
+本仓库原创代码、工作流模板及配套规范文档采用 [Mozilla Public License 2.0（MPL-2.0）](LICENSE)。
+
+MPL 允许商用和二次开发。对外分发受 MPL 覆盖的文件及其修改时，须遵守 MPL 的源码提供和许可要求，并保留版权与许可声明；具体义务以许可证全文为准。
+
+本许可证不改变被同步上游项目或第三方依赖的许可证。此前以 MIT 发布的历史版本仍可按对应版本的许可证使用。

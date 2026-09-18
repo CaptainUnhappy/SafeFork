@@ -1,3 +1,8 @@
+<!--
+Copyright (c) 2026 CaptainUnhappy
+SPDX-License-Identifier: MPL-2.0
+-->
+
 # SafeFork v1 规范
 
 ## 目标与边界
