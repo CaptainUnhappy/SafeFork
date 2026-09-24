@@ -22,11 +22,12 @@ SafeFork 是 GitHub Fork 的非破坏性同步规范：同步上游分支和标�
 
 - 仓库变量 `SAFEFORK_UPSTREAM=owner/repo`
 - 仓库变量 `SAFEFORK_PRIMARY_BRANCH=main`（按上游默认分支调整）
-- Actions Secret `SAFEFORK_DEPLOY_KEY`：仅可写入目标 Fork 的 deploy key 私钥
 
 首次运行请选择 `dry_run`；确认计划后执行正式同步并核对 refs。绿色零写入记录不代表真实写入已通过验收。
 
-模板使用完整提交历史进行普通 push，计划每小时检查一次；GitHub 定时调度可能延迟或丢弃，不提供准时保证。完整规则、验收和回滚测试见 [规范](skills/safefork/references/spec.md)。
+模板使用当前任务短期、仓库级的 `GITHUB_TOKEN` 和完整提交历史进行普通 push，不需要长期 Deploy Key 或 PAT，也不会因为同步推送而启动上游继承的 `push` 工作流。若仓库策略拒绝写入，任务会停止而不会自动改用可能触发发布或部署的凭证。计划每小时检查一次；GitHub 定时调度可能延迟或丢弃，不提供准时保证。完整规则、验收和回滚测试见 [规范](skills/safefork/references/spec.md)。
+
+SafeFork 只负责同步 Git 引用，不应顺带执行上游项目的构建或发布。安装和维护时应审计 Actions 列表与最近运行；除 `Safe Fork Sync` 外，继承的构建、发布和部署工作流默认停用，除非你明确要求保留。
 
 `sync-control` 不会自动继承本仓库后续修复。排障或维护既有 Fork 时，应核对已部署工作流的 `SAFEFORK_TEMPLATE_VERSION` 和模板内容；发现漂移后先升级工作流并执行 `dry_run`，有真实待同步引用时再验证写入路径。
 

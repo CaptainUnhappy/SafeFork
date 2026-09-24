@@ -74,6 +74,7 @@ Fork 的 `sync-control` 是独立分支，不会自动获得规范仓库后续�
 7. 任何读取不完整、权限失败、来源变化或未知关系都 fail closed。
 8. Git 写入前必须拉取来源引用的完整提交祖先历史，不使用 `--depth` 等浅克隆参数。普通 push 必须能在本地证明快进关系；API 判断可快进不能补足 Git 对象缺失，也不能作为强推理由。
 9. 所有计划更新与创建的目标引用都应在第一次写入前复核；复核后仍发生竞态时依赖普通 Git push 拒绝覆盖，并在摘要中报告已完成写入数量。
+10. 引用写入必须使用当前任务的仓库级 `GITHUB_TOKEN`，避免同步产生的 `push` 事件启动从上游继承的构建、发布或部署工作流。不得在失败后自动降级为 Deploy Key、GitHub App token 或 PAT。
 
 主分支文件数量阈值只是异常删除闸门，不证明代码安全或语义正确。
 
@@ -93,6 +94,7 @@ Fork 的 `sync-control` 是独立分支，不会自动获得规范仓库后续�
 - dry-run：所有检查执行，零 POST/PATCH/DELETE。
 - 所有场景：不得发出 DELETE 或 `force=true`。
 - 已部署模板：`SAFEFORK_TEMPLATE_VERSION` 与维护源一致，工作流内容无未审计漂移。
+- 同步写入后：没有由该次引用更新派生的上游 `push` 工作流；Fork 中继承的构建、发布和部署工作流默认处于停用状态，除非用户明确要求启用。
 
 远端验收不能只看 Action 绿色状态。应分别列出上游与 Fork 的 heads/tags，确认所有上游引用同名同 SHA，并单独列出保留的 Fork-only 引用。
 
@@ -114,8 +116,10 @@ Fork 的 `sync-control` 是独立分支，不会自动获得规范仓库后续�
 
 测试期间记录的原始 SHA 可用于短期恢复；如果目标分支已被其他操作改变，应停止，不能取消 lease 保护。
 
-## 令牌
+## 令牌与工作流副作用
 
-工作流只给 `GITHUB_TOKEN` 配置 `contents: read`，用于读取和校验。引用写入使用仅绑定目标 Fork 的 write-enabled deploy key，私钥保存为 Actions Secret `SAFEFORK_DEPLOY_KEY`。这避免把可访问其他仓库的用户 PAT 交给定时任务，也能同步涉及 `.github/workflows/*` 的提交或标签。
+工作流给当前任务自动生成的 `GITHUB_TOKEN` 配置且只配置 `contents: write`。该令牌仅限当前仓库、任务结束后失效；GitHub 不会为它产生的普通 `push` 再启动工作流，因此它既承担读取校验，也承担引用写入。
 
-部署时生成独立 Ed25519 密钥对，将公钥添加到目标 Fork 的 Deploy keys 并启用写入，将私钥原文写入 `SAFEFORK_DEPLOY_KEY`。密钥不得复用于其他仓库，不得提交到 Git。
+Deploy Key、GitHub App token 和 PAT 产生普通仓库事件。若用它们推送上游提交，Fork 会执行该提交中的 `push` 工作流；Fork 又不会继承上游 Secrets，常见结果是无意义失败，也可能在 Fork 已配置凭据时产生发布或部署副作用。因此 SafeFork 不保存长期写入密钥，也不在 `GITHUB_TOKEN` 写入失败后自动降级。
+
+如果分支保护、仓库策略或 GitHub 对工作流文件的权限检查拒绝 `GITHUB_TOKEN` 推送，同步必须 fail closed 并请求人工审查。不得为了“继续同步”自动换成会触发下游工作的凭证。安装和维护时还应审计 Actions 列表与最近运行；除 `Safe Fork Sync` 外，继承的构建、发布和部署工作流默认停用，用户明确要求时才启用。

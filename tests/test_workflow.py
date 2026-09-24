@@ -29,7 +29,10 @@ def scenario(case):
         "verify_reads": 0,
         "calls": [],
     }
-    if case in {"fast_forward", "dry_run", "diverged", "target_moved", "eventual_consistency", "file_drop"}:
+    if case in {
+        "fast_forward", "dry_run", "diverged", "target_moved", "eventual_consistency",
+        "file_drop", "missing_token", "push_rejected",
+    }:
         state["fork_heads"]["main"] = A
     if case == "tags_missing":
         state["upstream_tags"] = {"v1": D, "v2": E}
@@ -126,6 +129,7 @@ def mock_api(args):
 
 
 def mock_git(args):
+    case = os.environ["TEST_CASE"]
     state_path = Path(os.environ["TEST_STATE"])
     state = json.loads(state_path.read_text())
     command = next((arg for arg in args if arg in {"init", "fetch", "rev-parse", "push"}), "")
@@ -141,6 +145,10 @@ def mock_git(args):
         ref_type, name = destination.split("/", 1)
         target = state["fork_heads" if ref_type == "heads" else "fork_tags"]
         source = state["upstream_heads" if ref_type == "heads" else "upstream_tags"]
+        if case == "push_rejected":
+            state["calls"].append({"method": "GIT_PUSH_REJECTED", "route": destination, "args": args})
+            state_path.write_text(json.dumps(state))
+            return 1
         state["calls"].append({"method": "GIT_PUSH", "route": destination, "args": args})
         target[name] = source[name]
     else:
@@ -188,6 +196,7 @@ class RealGitPushTests(unittest.TestCase):
         # Rewrite only transport URLs. Fetch, ancestry checks and push stay real.
         shim = r'''
 set -euo pipefail
+writes=0
 report() { printf '%s\n' "$1"; }
 verify_ref() {
   local actual
@@ -200,7 +209,7 @@ git() {
   for arg in "$@"; do
     case "$arg" in
       "https://github.com/owner/example.git") arg=$TEST_UPSTREAM_URL ;;
-      "git@github.com:CaptainUnhappy/example-SafeFork.git") arg=$TEST_FORK_PATH ;;
+      "https://github.com/CaptainUnhappy/example-SafeFork.git") arg=$TEST_FORK_PATH ;;
     esac
     args+=("$arg")
   done
@@ -266,9 +275,14 @@ class WorkflowTests(unittest.TestCase):
         cls.script = workflow["jobs"]["sync"]["steps"][0]["run"]
 
     def test_contract_and_syntax(self):
-        self.assertEqual(self.workflow["permissions"], {"contents": "read"})
-        self.assertEqual(self.workflow["jobs"]["sync"]["env"]["SAFEFORK_TEMPLATE_VERSION"], "2026-09-24.1")
+        self.assertEqual(self.workflow["permissions"], {"contents": "write"})
+        self.assertEqual(self.workflow["jobs"]["sync"]["env"]["SAFEFORK_TEMPLATE_VERSION"], "2026-09-24.2")
         self.assertIn('report "SafeFork template version: $SAFEFORK_TEMPLATE_VERSION"', self.script)
+        self.assertIn('GIT_ASKPASS="$push_dir/askpass"', self.script)
+        self.assertIn('https://github.com/$GITHUB_REPOSITORY.git', self.script)
+        self.assertIn("GitHub suppresses downstream push-workflow runs", self.script)
+        self.assertNotIn("SAFEFORK_DEPLOY_KEY", self.script)
+        self.assertNotIn("git@github.com", self.script)
         self.assertIn('upstream_tags_raw=$(list_refs "$UPSTREAM_REPO" tags)', self.script)
         self.assertNotIn("--depth", self.script)
         self.assertNotIn('select(.type == "blob" or .type == "commit")', self.script)
@@ -286,6 +300,7 @@ class WorkflowTests(unittest.TestCase):
             "target_branch_created": (1, 0), "target_tag_created": (1, 0),
             "target_read_failed": (1, 0),
             "file_drop": (1, 0), "reserved_branch": (1, 0),
+            "missing_token": (1, 0), "push_rejected": (1, 0),
         }
         for case, (expected_exit, expected_writes) in cases.items():
             with self.subTest(case=case), tempfile.TemporaryDirectory() as folder:
@@ -299,14 +314,16 @@ class WorkflowTests(unittest.TestCase):
                     PRIMARY_BRANCH="main",
                     MIN_FILE_COUNT="3",
                     MIN_FILE_PERCENT="40",
-                    SAFEFORK_TEMPLATE_VERSION="2026-09-24.1",
-                    SAFEFORK_DEPLOY_KEY="test-private-key",
+                    SAFEFORK_TEMPLATE_VERSION="2026-09-24.2",
+                    GH_TOKEN="test-github-token",
                     DRY_RUN="true" if case == "dry_run" else "false",
                     GITHUB_STEP_SUMMARY=(Path(folder) / "summary.md").as_posix(),
                     TEST_CASE=case,
                     TEST_STATE=state_path.as_posix(),
                     PYTHONIOENCODING="utf-8",
                 )
+                if case == "missing_token":
+                    env.pop("GH_TOKEN")
                 command = shlex.quote(Path(sys.executable).as_posix()) + " " + shlex.quote(Path(__file__).as_posix())
                 shim = "gh() { " + command + ' mock "$@"; }\ngit() { ' + command + ' git-mock "$@"; }\nsleep() { :; }\n'
                 result = subprocess.run([BASH, "-s"], input=shim + self.script, env=env, capture_output=True, encoding="utf-8")
@@ -317,11 +334,16 @@ class WorkflowTests(unittest.TestCase):
                 self.assertFalse(any(call["method"] == "DELETE" for call in writes))
                 self.assertFalse(any("force=true" in call["args"] for call in writes))
                 summary = (Path(folder) / "summary.md").read_text(encoding="utf-8")
-                self.assertIn("SafeFork template version: 2026-09-24.1", summary)
+                self.assertIn("SafeFork template version: 2026-09-24.2", summary)
                 if case == "fork_only":
                     self.assertIn(f"Preserved Fork-only branch: scratch -> {A}", summary)
                 if case == "target_read_failed":
                     self.assertIn("Unable to verify that target heads/release/v1 is absent; fail closed.", summary)
+                    self.assertIn("Sync did not complete after writing 0 ref(s)", summary)
+                if case == "missing_token":
+                    self.assertIn("repository GITHUB_TOKEN is unavailable", summary)
+                if case == "push_rejected":
+                    self.assertIn("will not fall back to a deploy key or PAT", summary)
                     self.assertIn("Sync did not complete after writing 0 ref(s)", summary)
 
 
