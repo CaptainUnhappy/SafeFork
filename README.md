@@ -28,6 +28,8 @@ SafeFork 是 GitHub Fork 的非破坏性同步规范：同步上游分支和标�
 
 模板使用完整提交历史进行普通 push，计划每小时检查一次；GitHub 定时调度可能延迟或丢弃，不提供准时保证。完整规则、验收和回滚测试见 [规范](skills/safefork/references/spec.md)。
 
+`sync-control` 不会自动继承本仓库后续修复。排障或维护既有 Fork 时，应核对已部署工作流的 `SAFEFORK_TEMPLATE_VERSION` 和模板内容；发现漂移后先升级工作流并执行 `dry_run`，有真实待同步引用时再验证写入路径。
+
 在 Codex 中安装本仓库的 `skills/safefork` 后，可直接说：`使用 $safefork 安全同步 owner/repo 的 Fork`。
 
 ## 许可证

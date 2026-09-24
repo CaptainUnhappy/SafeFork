@@ -28,6 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
+      SAFEFORK_TEMPLATE_VERSION: "2026-09-24.1"
       GH_TOKEN: ${{ github.token }}
       SAFEFORK_DEPLOY_KEY: ${{ secrets.SAFEFORK_DEPLOY_KEY }}
       UPSTREAM_REPO: ${{ vars.SAFEFORK_UPSTREAM }}
@@ -42,18 +43,25 @@ jobs:
         run: |
           set -euo pipefail
           push_dir=
+          writes=0
 
           cleanup() {
             [ -z "$push_dir" ] || rm -rf -- "$push_dir"
           }
 
-          trap cleanup EXIT
-          trap 'echo "::error::Sync did not complete. The summary lists refs already written."' ERR
-
           report() {
             printf '%s\n' "$1"
             printf '%s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
           }
+
+          fail_summary() {
+            report "::error::Sync did not complete after writing $writes ref(s); completed writes are listed above."
+          }
+
+          trap cleanup EXIT
+          trap fail_summary ERR
+
+          report "SafeFork template version: $SAFEFORK_TEMPLATE_VERSION"
 
           list_refs() {
             gh api "repos/$1/git/matching-refs/$2/" --paginate --jq '.[] | [.ref, .object.sha] | @tsv'
@@ -62,7 +70,7 @@ jobs:
           count_files() {
             gh api "repos/$1/git/trees/$2?recursive=1" --jq '
               if .truncated == false then
-                [.tree[] | select(.type == "blob" or .type == "commit")] | length
+                [.tree[] | select(.type == "blob")] | length
               else error("The recursive tree is truncated.") end'
           }
 
@@ -76,6 +84,19 @@ jobs:
               sleep "$attempt"
             done
             report "::error::$ref verification failed; expected $expected, got ${actual:-unavailable}."
+            return 1
+          }
+
+          require_ref_absent() {
+            local ref=$1 response
+            if response=$(gh api --include "repos/$GITHUB_REPOSITORY/git/ref/$ref" 2>&1); then
+              report "::error::Target $ref was created during planning."
+              return 1
+            fi
+            if [[ "$response" == *"HTTP 404"* ]]; then
+              return 0
+            fi
+            report "::error::Unable to verify that target $ref is absent; fail closed."
             return 1
           }
 
@@ -195,6 +216,17 @@ jobs:
             fi
           done
 
+          for branch in "${!fork_heads[@]}"; do
+            if [ "$branch" != "$CONTROL_BRANCH" ] && [ -z "${upstream_heads[$branch]+present}" ]; then
+              report "Preserved Fork-only branch: $branch -> ${fork_heads[$branch]}"
+            fi
+          done
+          for tag in "${!fork_tags[@]}"; do
+            if [ -z "${upstream_tags[$tag]+present}" ]; then
+              report "Preserved Fork-only tag: $tag -> ${fork_tags[$tag]}"
+            fi
+          done
+
           report "Plan: ${#create_branches[@]} new branches, ${#update_branches[@]} fast-forwards, ${#create_tags[@]} new tags."
           if [ "$DRY_RUN" = "true" ]; then
             report "Dry-run complete: zero writes."
@@ -209,10 +241,10 @@ jobs:
             exit 1
           fi
 
-          writes=0
           planned_writes=$((${#create_branches[@]} + ${#update_branches[@]} + ${#create_tags[@]}))
-          [ "$planned_writes" -eq 0 ] || configure_push
 
+          # Recheck every planned target before the first write. Ordinary pushes
+          # remain the final race-safe guard if a ref changes after this snapshot.
           for branch in "${update_branches[@]}"; do
             expected_before=${fork_heads[$branch]}
             latest=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" --jq '.object.sha')
@@ -220,6 +252,17 @@ jobs:
               report "::error::Target branch $branch changed during planning."
               exit 1
             fi
+          done
+          for branch in "${create_branches[@]}"; do
+            require_ref_absent "heads/$branch"
+          done
+          for tag in "${create_tags[@]}"; do
+            require_ref_absent "tags/$tag"
+          done
+
+          [ "$planned_writes" -eq 0 ] || configure_push
+
+          for branch in "${update_branches[@]}"; do
             source_sha=${upstream_heads[$branch]}
             push_ref heads "$branch" "$source_sha"
             writes=$((writes + 1))

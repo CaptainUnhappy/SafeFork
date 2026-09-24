@@ -38,6 +38,12 @@ def scenario(case):
         state["fork_tags"] = {"v1": E}
     elif case == "new_branch":
         state["upstream_heads"]["release/v1"] = C
+    elif case == "target_branch_created":
+        state["upstream_heads"]["release/v1"] = C
+    elif case == "target_read_failed":
+        state["upstream_heads"]["release/v1"] = C
+    elif case == "target_tag_created":
+        state["upstream_tags"] = {"v1": D}
     elif case == "fork_only":
         state["fork_heads"]["scratch"] = A
     elif case == "reserved_branch":
@@ -85,6 +91,12 @@ def mock_api(args):
         result = refs.get(name, "")
         if case == "target_moved" and ref == "heads/main":
             result = C
+        if case == "target_branch_created" and ref == "heads/release/v1":
+            result = A
+        if case == "target_read_failed" and ref == "heads/release/v1":
+            status = 1
+        if case == "target_tag_created" and ref == "tags/v1":
+            result = E
         if case == "eventual_consistency" and ref == "heads/main" and state["fork_heads"]["main"] == B:
             state["verify_reads"] += 1
             result = A if state["verify_reads"] == 1 else B
@@ -105,6 +117,9 @@ def mock_api(args):
         raise AssertionError(f"Unexpected request: {args}")
 
     path.write_text(json.dumps(state))
+    if status and "/git/ref/" in route:
+        message = "gh: API rate limit exceeded (HTTP 403)" if case == "target_read_failed" else "gh: Not Found (HTTP 404)"
+        print(message, file=sys.stderr)
     if result:
         print(result)
     return status
@@ -252,7 +267,11 @@ class WorkflowTests(unittest.TestCase):
 
     def test_contract_and_syntax(self):
         self.assertEqual(self.workflow["permissions"], {"contents": "read"})
+        self.assertEqual(self.workflow["jobs"]["sync"]["env"]["SAFEFORK_TEMPLATE_VERSION"], "2026-09-24.1")
+        self.assertIn('report "SafeFork template version: $SAFEFORK_TEMPLATE_VERSION"', self.script)
         self.assertIn('upstream_tags_raw=$(list_refs "$UPSTREAM_REPO" tags)', self.script)
+        self.assertNotIn("--depth", self.script)
+        self.assertNotIn('select(.type == "blob" or .type == "commit")', self.script)
         self.assertNotIn("--method DELETE", self.script)
         self.assertNotIn("force=true", self.script)
         result = subprocess.run([BASH, "-n"], input=self.script, text=True, capture_output=True, encoding="utf-8")
@@ -264,6 +283,8 @@ class WorkflowTests(unittest.TestCase):
             "fork_only": (0, 0), "fast_forward": (0, 1), "dry_run": (0, 0),
             "diverged": (1, 0), "tag_conflict": (1, 0), "source_changed": (1, 0),
             "target_moved": (1, 0), "eventual_consistency": (0, 1),
+            "target_branch_created": (1, 0), "target_tag_created": (1, 0),
+            "target_read_failed": (1, 0),
             "file_drop": (1, 0), "reserved_branch": (1, 0),
         }
         for case, (expected_exit, expected_writes) in cases.items():
@@ -278,6 +299,7 @@ class WorkflowTests(unittest.TestCase):
                     PRIMARY_BRANCH="main",
                     MIN_FILE_COUNT="3",
                     MIN_FILE_PERCENT="40",
+                    SAFEFORK_TEMPLATE_VERSION="2026-09-24.1",
                     SAFEFORK_DEPLOY_KEY="test-private-key",
                     DRY_RUN="true" if case == "dry_run" else "false",
                     GITHUB_STEP_SUMMARY=(Path(folder) / "summary.md").as_posix(),
@@ -294,6 +316,13 @@ class WorkflowTests(unittest.TestCase):
                 self.assertEqual(len(writes), expected_writes, result.stdout + result.stderr)
                 self.assertFalse(any(call["method"] == "DELETE" for call in writes))
                 self.assertFalse(any("force=true" in call["args"] for call in writes))
+                summary = (Path(folder) / "summary.md").read_text(encoding="utf-8")
+                self.assertIn("SafeFork template version: 2026-09-24.1", summary)
+                if case == "fork_only":
+                    self.assertIn(f"Preserved Fork-only branch: scratch -> {A}", summary)
+                if case == "target_read_failed":
+                    self.assertIn("Unable to verify that target heads/release/v1 is absent; fail closed.", summary)
+                    self.assertIn("Sync did not complete after writing 0 ref(s)", summary)
 
 
 if __name__ == "__main__":

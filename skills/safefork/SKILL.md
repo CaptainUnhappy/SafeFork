@@ -18,7 +18,7 @@ Read [references/spec.md](references/spec.md) before creating or changing a remo
 ## Operating workflow
 
 1. Derive the target name before creation. Unless the user explicitly names a target, append `-SafeFork` exactly once to the upstream repository name and use the authenticated GitHub account as owner. An explicitly requested organization or name wins.
-2. Inspect the target repository, its parent, default branch, all `refs/heads/*`, all `refs/tags/*`, workflow state, and recent runs.
+2. Inspect the target repository, its parent, default branch, all `refs/heads/*`, all `refs/tags/*`, workflow state, recent runs, and the deployed `SAFEFORK_TEMPLATE_VERSION`. Compare the deployed workflow with the maintained template before trusting its results.
 3. Separate observed facts from assumptions. Verify that the named target is a real Fork of the intended upstream.
 4. Produce a dry-run plan. Classify every upstream branch as create, equal, fast-forward, or blocked; classify every tag as create, equal, or conflict.
 5. For an explicitly requested SafeFork setup or sync, apply only additive or fast-forward changes. A normal SafeFork request authorizes those scoped writes, not force updates, deletions, merges, repository creation beyond the derived or named target, or backup refs.
@@ -37,6 +37,7 @@ Read [references/spec.md](references/spec.md) before creating or changing a remo
 - Preserve Fork-only branches and tags.
 - `dry_run` must perform zero writes.
 - A green zero-write run does not validate transport. Cover real fast-forward, new-branch, and annotated-tag pushes in isolated Git tests before deploying template changes.
+- Existing Forks do not inherit later control-branch fixes. A missing or mismatched `SAFEFORK_TEMPLATE_VERSION`, or a workflow content mismatch, is deployment drift: upgrade the control-branch workflow, run `dry_run`, then validate a real pending write when one exists.
 - Do not create backup branches unless the user explicitly requests one and sees its exact name.
 - If the default target name is occupied by an unrelated repository, or the namespace already has a differently named Fork of the same upstream, stop and ask which repository to use. Never append a numeric suffix or rename an existing repository silently.
 - Use a write-enabled deploy key restricted to the target Fork for ref pushes. Keep its private key only in the `SAFEFORK_DEPLOY_KEY` Actions Secret; do not substitute a broad user PAT merely for convenience.
